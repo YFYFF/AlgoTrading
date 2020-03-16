@@ -42,13 +42,13 @@ class Excution:
         self.orderCompleted = []
 
         self.orderSetPtr = 0
-        self.coverCondition = None
+        self.marketType = None
 
     def backtest(self):
 
         for tick in self.timeInterval:
             self.readMktData(tick)
-            self.getCoverCondition()
+            self.getMarketType()
             self.checkNewOrder(tick)
             self.ExcuteOngoingOrder(tick)
 
@@ -65,29 +65,45 @@ class Excution:
         if tick == self.orderSet.iloc[self.orderSetPtr]['Time']:
             direction = self.orderSet.iloc[self.orderSetPtr]['Side']
             newOrder = Order(direction, tick, self.mktData)
+            newOrder = self.setCoverCondition(newOrder)
             newOrder = self.setExcutionTarget(newOrder)
             self.orderOngoing[tick] = newOrder
             self.orderSetPtr += 1
+
+    def setCoverCondition(self, newOrder):
+        """Set order cover condition.
+
+        Set order cover condition according to market type.
+        """
+        # enforce using certain cover condition
+        if self.marketType == MarketType.AlwaysMT:
+            newOrder.coverCondition = CoverType(0)
+        elif self.marketType == MarketType.AlwaysOMMSide:
+            newOrder.coverCondition = CoverType(1)
+        elif self.marketType == MarketType.AlwaysOMMid:
+            newOrder.coverCondition = CoverType(2)
+
+        return newOrder
 
     def setExcutionTarget(self, newOrder):
         """
         Set excution target bid or ask price
         """
-        if self.coverCondition == CoverType(0):
+        if newOrder.coverCondition == CoverType(0):
             if newOrder.direction == 'B':
                 newOrder.targetAsk = self.mktData.Ask
                 newOrder.targetBid = None
             elif newOrder.direction == 'S':
                 newOrder.targetAsk = None
                 newOrder.targetBid = self.mktData.Bid
-        elif self.coverCondition == CoverType(1):
+        elif newOrder.coverCondition == CoverType(1):
             if newOrder.direction == 'B':
                 newOrder.targetAsk = self.mktData.Bid
                 newOrder.targetBid = None
             elif newOrder.direction == 'S':
                 newOrder.targetAsk = None
                 newOrder.targetBid = self.mktData.Ask
-        elif self.coverCondition == CoverType(2):
+        elif newOrder.coverCondition == CoverType(2):
             if newOrder.direction == 'B':
                 newOrder.targetAsk = (self.mktData.Ask + self.mktData.Bid) / 2
                 newOrder.targetBid = None
@@ -115,8 +131,8 @@ class Excution:
         thisOrder.Pnl = thisOrder.MTPnl + thisOrder.OMMPnl
         self.orderOngoing[k] = thisOrder
 
-    def getCoverCondition(self):
-        self.coverCondition = CoverType(2)  # TODO: change
+    def getMarketType(self):
+        self.marketType = MarketType(100)  # TODO: change
 
     def closeOngoingOrder(self, thisOrder, k):
         if self.checkCoverCondition(thisOrder, k):
@@ -173,7 +189,7 @@ class Excution:
             dfResult.loc[i, 'Side'] = thisOrder.direction
             dfResult.loc[i, 'MTBid'] = thisOrder.MTBid
             dfResult.loc[i, 'MTAsk'] = thisOrder.MTAsk
-            dfResult.loc[i, 'CoverType'] = self.coverConditions
+            dfResult.loc[i, 'CoverType'] = thisOrder.coverCondition
             dfResult.loc[i, 'TargetBid'] = thisOrder.targetBid
             dfResult.loc[i, 'TargetAsk'] = thisOrder.targetAsk
             dfResult.loc[i, 'ExcuteBid'] = thisOrder.excuteBid
@@ -182,7 +198,8 @@ class Excution:
             dfResult.loc[i, 'Pnl'] = thisOrder.Pnl
             dfResult.loc[i, 'TriggerSL'] = thisOrder.triggerSL
             dfResult.loc[i, 'TriggerTTE'] = thisOrder.triggerTTE
-            return dfResult
+
+        return dfResult
 
     def showOngoingSheet(self):
         """Show the sheet of ongoing order"""
@@ -202,7 +219,7 @@ class Excution:
             dfResult.loc[i, 'Side'] = thisOrder.direction
             dfResult.loc[i, 'MTBid'] = thisOrder.MTBid
             dfResult.loc[i, 'MTAsk'] = thisOrder.MTAsk
-            dfResult.loc[i, 'CoverType'] = self.coverConditions
+            dfResult.loc[i, 'CoverType'] = thisOrder.coverCondition
             dfResult.loc[i, 'TargetBid'] = thisOrder.targetBid
             dfResult.loc[i, 'TargetAsk'] = thisOrder.targetAsk
             dfResult.loc[i, 'ExcuteBid'] = thisOrder.excuteBid
@@ -211,7 +228,8 @@ class Excution:
             dfResult.loc[i, 'Pnl'] = thisOrder.Pnl
             dfResult.loc[i, 'TriggerSL'] = thisOrder.triggerSL
             dfResult.loc[i, 'TriggerTTE'] = thisOrder.triggerTTE
-            return dfResult
+
+        return dfResult
 
 
 class MktData:
@@ -252,6 +270,19 @@ class CoverType(Enum):
     OMMMid = 2
 
 
+@unique
+class MarketType(Enum):
+    NoType = 0
+    MER = 1
+    TrendUp = 2
+    TrendDown = 3
+
+    AlwaysMT = 100
+    AlwaysOMMSide = 101
+    AlwaysOMMid = 102
+
+
 e = Excution(timeInterval, orderSet, priceSet)
 e.backtest()
+
 time.sleep(5)
