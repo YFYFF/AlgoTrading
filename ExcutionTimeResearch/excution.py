@@ -4,37 +4,23 @@ from collections import deque
 from enum import Enum, unique
 import time
 from datetime import timedelta
-
-pathOrder = './data/MyOrderSet.csv'
-pathPrice = './data/SecondPriceSet.csv'
-
-orderSet = pd.read_csv(pathOrder)
-priceSet = pd.read_csv(pathPrice, index_col='Date')
-
-orderSet['Time'] = pd.to_datetime(orderSet['Time'])
-priceSet.index = pd.to_datetime(priceSet.index)
-test = int(len(priceSet) / 2)
-timeInterval = priceSet.index[:500]
-print('1')
-"""
-Note: finding that convert the datetime in priceSet consumes lots of time
-we first use
-priceSet.index = pd.to_datetime(priceSet.index, format='%m/%d/%Y %H:%M:%S')
-to convert the index
-then we do
-priceSet.to_csv(pathPrice)
-save it, so that we can use it now
-"""
+from tqdm.auto import tqdm
 
 
 class Excution:
     """"""
-    def __init__(self, timeInterval, orderSet, priceSet):
+    def __init__(self,
+                 timeInterval,
+                 orderSet,
+                 priceSet,
+                 mktType=100,
+                 maxSL=-0.05,
+                 maxTTENum=600):
         self.timeInterval = timeInterval
         self.orderSet = orderSet
         self.priceSet = priceSet
-        self.maxSL = -0.05
-        self.maxTTENum = 600
+        self.maxSL = maxSL
+        self.maxTTENum = maxTTENum
         self.maxTTE = timedelta(seconds=self.maxTTENum)
 
         self.mktData = None
@@ -43,14 +29,18 @@ class Excution:
 
         self.orderSetPtr = 0
         self.marketType = None
+        self.defaultMktType = mktType
 
     def backtest(self):
 
+        pbar = tqdm(total=len(self.timeInterval))
         for tick in self.timeInterval:
             self.readMktData(tick)
             self.getMarketType()
             self.checkNewOrder(tick)
             self.ExcuteOngoingOrder(tick)
+            pbar.update(1)
+        pbar.close()
 
     def readMktData(self, tick):
 
@@ -120,6 +110,8 @@ class Excution:
         for k, v in copydict.items():
             thisOrder = v
             self.renewPnl(thisOrder, k)
+            # remember to pick again to renew data
+            thisOrder = self.orderOngoing[k]
             self.closeOngoingOrder(thisOrder, k)
 
     def renewPnl(self, thisOrder, k):
@@ -132,7 +124,7 @@ class Excution:
         self.orderOngoing[k] = thisOrder
 
     def getMarketType(self):
-        self.marketType = MarketType(100)  # TODO: change
+        self.marketType = MarketType(self.defaultMktType)  # TODO: change
 
     def closeOngoingOrder(self, thisOrder, k):
         if self.checkCoverCondition(thisOrder, k):
@@ -160,6 +152,7 @@ class Excution:
             thisOrder.triggerSL = True
 
         if thisOrder.triggerTTE or thisOrder.triggerSL:
+            self.orderOngoing[k] = thisOrder
             return True
 
         return False
@@ -179,25 +172,29 @@ class Excution:
         columns = [
             'recv_time', 'Side', 'MTBid', 'MTAsk', 'CoverType', 'TargetBid',
             'TargetAsk', 'ExcuteBid', 'ExcuteAsk', 'OOMPnl', 'Pnl',
-            'TriggerSL', 'TriggerTTE'
+            'excu_time', 'TimeToExcute', 'TriggerSL', 'TriggerTTE', 'maxSL',
+            'maxTTE'
         ]
         dfResult = pd.DataFrame(index=range(len(self.orderCompleted)),
                                 columns=columns)
-        for i in range(len(self.orderCompleted)):
-            thisOrder = self.orderCompleted[i]
-            dfResult.loc[i, 'recv_time'] = thisOrder.recv_time
-            dfResult.loc[i, 'Side'] = thisOrder.direction
-            dfResult.loc[i, 'MTBid'] = thisOrder.MTBid
-            dfResult.loc[i, 'MTAsk'] = thisOrder.MTAsk
-            dfResult.loc[i, 'CoverType'] = thisOrder.coverCondition
-            dfResult.loc[i, 'TargetBid'] = thisOrder.targetBid
-            dfResult.loc[i, 'TargetAsk'] = thisOrder.targetAsk
-            dfResult.loc[i, 'ExcuteBid'] = thisOrder.excuteBid
-            dfResult.loc[i, 'ExcuteAsk'] = thisOrder.excuteAsk
-            dfResult.loc[i, 'OOMPnl'] = thisOrder.OMMPnl
-            dfResult.loc[i, 'Pnl'] = thisOrder.Pnl
-            dfResult.loc[i, 'TriggerSL'] = thisOrder.triggerSL
-            dfResult.loc[i, 'TriggerTTE'] = thisOrder.triggerTTE
+        L = self.orderCompleted
+        dfResult['recv_time'] = [i.recv_time for i in L]
+        dfResult['Side'] = [i.direction for i in L]
+        dfResult['MTBid'] = [i.MTBid for i in L]
+        dfResult['MTAsk'] = [i.MTAsk for i in L]
+        dfResult['CoverType'] = [i.coverCondition for i in L]
+        dfResult['TargetBid'] = [i.targetBid for i in L]
+        dfResult['TargetAsk'] = [i.targetAsk for i in L]
+        dfResult['ExcuteBid'] = [i.excuteBid for i in L]
+        dfResult['ExcuteAsk'] = [i.excuteAsk for i in L]
+        dfResult['OOMPnl'] = [i.OMMPnl for i in L]
+        dfResult['Pnl'] = [i.Pnl for i in L]
+        dfResult['excu_time'] = [i.excu_time for i in L]
+        dfResult['TimeToExcute'] = [i.excu_time - i.recv_time for i in L]
+        dfResult['TriggerSL'] = [i.triggerSL for i in L]
+        dfResult['TriggerTTE'] = [i.triggerTTE for i in L]
+        dfResult['maxSL'] = self.maxSL
+        dfResult['maxTTE'] = self.maxTTENum
 
         return dfResult
 
@@ -209,7 +206,7 @@ class Excution:
         columns = [
             'recv_time', 'Side', 'MTBid', 'MTAsk', 'CoverType', 'TargetBid',
             'TargetAsk', 'ExcuteBid', 'ExcuteAsk', 'OOMPnl', 'Pnl',
-            'TriggerSL', 'TriggerTTE'
+            'TriggerSL', 'TriggerTTE', 'maxSL', 'maxTTE'
         ]
         dfResult = pd.DataFrame(index=range(len(self.orderOngoing)),
                                 columns=columns)
@@ -228,6 +225,8 @@ class Excution:
             dfResult.loc[i, 'Pnl'] = thisOrder.Pnl
             dfResult.loc[i, 'TriggerSL'] = thisOrder.triggerSL
             dfResult.loc[i, 'TriggerTTE'] = thisOrder.triggerTTE
+            dfResult.loc[i, 'maxSL'] = self.maxSL
+            dfResult.loc[i, 'maxTTE'] = self.maxTTENum
 
         return dfResult
 
@@ -282,7 +281,38 @@ class MarketType(Enum):
     AlwaysOMMid = 102
 
 
-e = Excution(timeInterval, orderSet, priceSet)
-e.backtest()
+def main():
+    pathOrder = './data/MyOrderSet.csv'
+    pathPrice = './data/SecondPriceSet.csv'
 
-time.sleep(5)
+    orderSet = pd.read_csv(pathOrder)
+    priceSet = pd.read_csv(pathPrice, index_col='Date')
+
+    orderSet['Time'] = pd.to_datetime(orderSet['Time'])
+    priceSet.index = pd.to_datetime(priceSet.index)
+    test = int(len(priceSet) / 2)
+    timeInterval = priceSet.index[:1500]
+    print('1')
+    """
+    Note: finding that convert the datetime in priceSet consumes lots of time
+    we first use
+    priceSet.index = pd.to_datetime(priceSet.index, format='%m/%d/%Y %H:%M:%S')
+    to convert the index
+    then we do
+    priceSet.to_csv(pathPrice)
+    save it, so that we can use it now
+    """
+
+    mktType = 101
+    maxSL = -0.0003
+    maxTTENum = 600
+    e = Excution(timeInterval, orderSet, priceSet, mktType, maxSL, maxTTENum)
+    e.backtest()
+    dfResult = e.showResultSheet()
+    time.sleep(5)
+
+    dfResult.to_csv('./result/output.csv')
+
+
+if __name__ == '__main__':
+    main()
