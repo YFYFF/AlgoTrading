@@ -31,6 +31,9 @@ class Excution:
         self.marketType = None
         self.defaultMktType = mktType
 
+        self.lookback = deque([])
+        self.lookbackPeriod = 65
+
     def backtest(self):
 
         pbar = tqdm(total=len(self.timeInterval))
@@ -47,10 +50,44 @@ class Excution:
         bid, ask = self.priceSet.loc[tick, ['Bid', 'Ask']]
         self.mktData = MktData(bid, ask, tick)
 
+        midPrice = (bid + ask) / 2
+        self.lookback.append(midPrice)
+        if len(self.lookback) > self.lookbackPeriod:
+            self.lookback.popleft()
+
+    def getMarketType(self):
+        if self.defaultMktType > 99:
+            self.marketType = MarketType(self.defaultMktType)  # TODO: change
+            return
+
+        if len(self.lookback) < self.lookbackPeriod:  # not enough data
+            self.marketType = MarketType.NoType
+            return
+
+        tmp = pd.Series(self.lookback)
+        long_ave = tmp.rolling(60).mean()
+        short_ave = tmp.rolling(5).mean()
+
+        diff = short_ave - long_ave
+        if abs(diff.mean()) > 5e-7:  # Trend
+            if diff.iloc[-1] > 0 and diff.iloc[-2] > 0:
+                self.marketType = MarketType.TrendUp
+                return
+            if diff.iloc[-1] < 0 and diff.iloc[-2] < 0:
+                self.marketType = MarketType.TrendDown
+                return
+        self.marketType = MarketType.NoType
+        return
+
     def checkNewOrder(self, tick):
         if self.orderSetPtr > len(self.orderSet) - 1:
             # out of index, no new order
             return
+
+        while tick > self.orderSet.iloc[self.orderSetPtr]['Time']:
+            self.orderSetPtr += 1
+            if self.orderSetPtr > len(self.orderSet) - 1:
+                return
 
         if tick == self.orderSet.iloc[self.orderSetPtr]['Time']:
             direction = self.orderSet.iloc[self.orderSetPtr]['Side']
@@ -71,6 +108,18 @@ class Excution:
         elif self.marketType == MarketType.AlwaysOMMSide:
             newOrder.coverCondition = CoverType(1)
         elif self.marketType == MarketType.AlwaysOMMid:
+            newOrder.coverCondition = CoverType(2)
+        elif self.marketType == MarketType.TrendUp:
+            if newOrder.direction == 'B':
+                newOrder.coverCondition = CoverType(2)
+            elif newOrder.direction == 'S':
+                newOrder.coverCondition = CoverType(1)
+        elif self.marketType == MarketType.TrendDown:
+            if newOrder.direction == 'B':
+                newOrder.coverCondition = CoverType(1)
+            elif newOrder.direction == 'S':
+                newOrder.coverCondition = CoverType(2)
+        elif self.marketType == MarketType.NoType:
             newOrder.coverCondition = CoverType(2)
 
         return newOrder
@@ -122,9 +171,6 @@ class Excution:
 
         thisOrder.Pnl = thisOrder.MTPnl + thisOrder.OMMPnl
         self.orderOngoing[k] = thisOrder
-
-    def getMarketType(self):
-        self.marketType = MarketType(self.defaultMktType)  # TODO: change
 
     def closeOngoingOrder(self, thisOrder, k):
         if self.checkCoverCondition(thisOrder, k):
@@ -290,8 +336,8 @@ def main():
 
     orderSet['Time'] = pd.to_datetime(orderSet['Time'])
     priceSet.index = pd.to_datetime(priceSet.index)
-    test = int(len(priceSet) / 2)
-    timeInterval = priceSet.index[:1500]
+    test = int(len(priceSet) / 40)
+    timeInterval = priceSet.index[3*test:4*test]
     print('1')
     """
     Note: finding that convert the datetime in priceSet consumes lots of time
@@ -304,8 +350,8 @@ def main():
     """
 
     mktType = 101
-    maxSL = -0.0003
-    maxTTENum = 600
+    maxSL = -0.0005
+    maxTTENum = 150
     e = Excution(timeInterval, orderSet, priceSet, mktType, maxSL, maxTTENum)
     e.backtest()
     dfResult = e.showResultSheet()
