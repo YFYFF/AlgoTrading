@@ -5,8 +5,8 @@ Created on Tue Feb  4 13:18:05 2020
 @author: WilliamNG
 """
 """
-Algo_Trading HW1
-note that the return is simple return 
+IAQF problem one helper
+generate data of portfolio
 
 """
 import os
@@ -18,35 +18,19 @@ from scipy import stats
 import matplotlib.pyplot as plt
 from pandas.plotting import register_matplotlib_converters
 register_matplotlib_converters()
-import seaborn as sns
 
 
-class Read():
-    def __init__(self, path, col):
-        """
-        :param path: the path of the csv file
-        :param col: which col we are reading, a list
-        """
-        self._path = path
-        self._col = col
-        self.df = pd.DataFrame()
-    
-    def read(self):
-        df_temp = pd.read_csv(self._path, index_col='DateTime')
-        df_temp.index = pd.to_datetime(df_temp.index)
-        self._col.append('Price_Close')
-        self.df = df_temp[self._col]
-        
-        #get return for the price
-        price_lag = self.df['Price_Close'].shift(1)
-        self.df.loc[:, 'Return_Close'] = self.df['Price_Close'] / price_lag - 1
-        self.df = self.df.replace([np.inf, -np.inf], 0)
-        self.df = self.df.fillna(value={'Return_Close':0})
-        self.df = self.df.drop(['Price_Close'], axis=1)
-        self.df = self.df.drop(['Return_Close'], axis=1)
-    
+from datetime import datetime, timedelta
+def getClosestValue(dt, df):
+    if type(dt) is str:
+        dt = datetime.strptime(dt, '%Y-%m-%d')
+    if dt in df.index:
+        return df[dt]
+    else: 
+        dt = dt - timedelta(days=1)
+        return getClosestValue(dt, df)
 
-        
+
 class Performance():
     def __init__(self, df, rf=0, varnum=0.05):
         self.df = df
@@ -74,6 +58,8 @@ class Performance():
     @varnum.setter
     def varnum(self, var_number):
         self._varnum = var_number
+    
+
     
     def maxDrawDown(self):
         cumReturn_df = self.cumReturn_df
@@ -103,20 +89,31 @@ class Performance():
         return self.volatility_num
         
     def cumreturnToMaxDD(self):
-        self.cumreturnToMaxDD_num = self.cumReturn() / self.maxDrawDown()
+        self.cumreturnToMaxDD_num =  self.cumReturn() / self.maxDrawDown()
         self.cumreturnToMaxDD_num = self.cumreturnToMaxDD_num.rename('Return/MaxDD')
         return self.cumreturnToMaxDD_num
-
+    
+    def cumReturnPlot(self):
+        col = self.cumReturn_df.columns
+        self.cumReturn_df[col].plot(grid=True, figsize=(15,7))
+        plt.show()
         
     def aveReturn(self):
         self.aveReturn_num = self.df.mean().rename('aveReturn')
         return self.aveReturn_num
     
     def getVaR(self):
-        self.VaR = self.df.quantile(0.05, interpolation='lower').rename('VaR')
+        self.VaR = self.df.quantile(self._varnum, interpolation='lower').rename('VaR')
         return self.VaR
     
-        
+    
+    def getCVaR(self):
+        self.CVaR = self.df[self.df < self.getVaR()].mean().rename('CVaR')
+        return self.CVaR
+    
+
+
+
     def generatePerformance(self):
         a = self.maxDrawDown()
         b = self.volatility()
@@ -124,53 +121,90 @@ class Performance():
         d = self.cumreturnToMaxDD()
         e = self.aveReturn()
         f = self.sharpe()
-        self.gendf = pd.concat([a, b, c, d, e, f], axis=1)
+        g = self.getVaR()
+        h = self.getCVaR()
+        
+        self.gendf = pd.concat([a, b, c, d, e, f, g, h], axis=1)
         return self.gendf
 
     
-    def cumReturnPlot(self):
-        #plt.figure()
-        col = self.cumReturn_df.columns
-        self.cumReturn_df[col].plot(grid=True, figsize=(15,7))
-        plt.show()
-    
     def performanceSheet(self):
-        print(self.gendf)
-        self.gendf.to_csv('result.csv')
+        with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+            print(self.gendf)
     
     def performanceBar(self):
-        #plt.figure()
         self.gendf.plot.bar(grid=True, subplots=True, figsize=(7, 15))
         self.gendf.plot.bar(grid=True, figsize=(15, 8))
-        plt.show()
     
     def performanceDis(self):
-        #plt.figure()
         self.df.plot(kind='kde', figsize=(15, 7))
-        plt.show()
+
+
+
+def timeseries(start_dt, end_dt, lasting_dt, df_return):
+    from datetime import datetime
+    t1 = time.time()
+    """
+    :传入 开始时间，结束时间，希望搞一次的工作日数e.g.5，整个原始数据
+    :传出 一个含有所有东西的df
+    """
+    #generate a df have necessary infomation for create the loop
+    # of Performance class
+    a = df_return[start_dt:end_dt]['PORTFOLIO_r']
+    b = df_return[start_dt:end_dt]['PORTFOLIO_d']
+    c = df_return[start_dt:end_dt]['S&P500']
+    df_useful = pd.concat([a, b, c], axis=1, names=['r', 'd', 'spx'])
+
+
+    #get the list of dates we need
+    #useful_idx_list = df_useful.index
+    useful_index_list = [x.strftime('%Y-%m-%d') for x in df_useful.index]
+    each_start_list = useful_index_list[0:-(lasting_dt-1)]
+    each_end_list = useful_index_list[lasting_dt-1:]
+
+    #get columns
+    temp = Performance(df_useful.head())
+
+    #get time series result
+    columns = ['start', 'end', 'name', 'period']
+    columns.extend(temp.generatePerformance().columns) #TODO: get self.gendf
+    df_result = pd.DataFrame(index=range(len(each_end_list)*3), columns=columns)
+    df_result['period'] = lasting_dt
+    t2 = time.time()
+    #generate each time's result
+    for i in range(len(each_end_list)):
+        each_start = each_start_list[i]
         
-        
+        each_end = each_end_list[i] #the next day of ending
+        df_perTime = df_useful[each_start:each_end] #the time interval
+        idx_in_result = int(3*i)
+
+        temp =  Performance(df_perTime)
+        temp_gendf = temp.generatePerformance()
+
+        for num in range(3):
+            df_result.loc[idx_in_result+num, temp_gendf.columns] = temp_gendf.iloc[num]
+            df_result.loc[idx_in_result+num, 'name'] = temp_gendf.index[num]
+            df_result.loc[idx_in_result+num, 'start'] = each_start
+            df_result.loc[idx_in_result+num, 'end'] = each_end
+    
+    t3 = time.time()
+    print(t2-t1)
+    print(t3-t1)       
+    return df_result
+
+
+
+
+
+
+
+
+
+
 
 def main():
-    path1 = './data/Assignment#1_Performance_track_records_Spring2020_out.csv'
-    #col1 = ['03_02', '03_08', '03_09', '01_03', '01_08']
-    # col1 = ['03_01', '03_02', '03_03', '03_04',
-    #    '03_05', '03_06', '03_07', '03_08', '03_09', '03_10', '03_11', '03_12',
-    #    '01_01', '01_02', '01_03', '01_04', '01_05', '01_06', '01_07', '01_08',
-    #    '01_09', '01_10', '01_11', '01_12']
-    col1 = ['03_03', '03_04', '01_02', '03_07', '01_09']
-    read1 = Read(path1, col1)
-    read1.read()
+    pass
 
-    per = Performance(read1.df)
-
-    per.generatePerformance()
-    per.performanceSheet()
-    per.performanceDis()
-    per.performanceBar()
-    per.cumReturnPlot()
-    
-    print(per.getVaR())
-    
 if __name__ == '__main__':
-    main()
+    main()    
